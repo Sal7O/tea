@@ -168,6 +168,7 @@ typedef struct
 
 // TODO: search if it is better to load the spritesheet again or copying it.
 // My first impression is that copying is cheaper because it happens in memory.
+// You will not load the file again. You can load the texture from the old surface directly.
 // See: https://stackoverflow.com/questions/75873908/how-to-copy-a-texture-to-another-texture-without-pointing-to-the-same-texture
 SDL_Texture* DuplicateTexture(SDL_Texture* tex, SDL_Renderer* renderer) {
     Uint32 format;
@@ -213,7 +214,7 @@ void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *fo
     scc(SDL_SetTextureAlphaMod(font->spritesheet_under_cursor , GET_ALPHA(trans_color)));
 }
 
-void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bool use_colored_char, float scale)
+void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bool is_cursor_col, bool is_cursor_row, float scale)
 {
     SDL_Rect dst = {
         .x = pos.x,
@@ -224,22 +225,16 @@ void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bo
 
     int index = c - ASCII_DISPLAY_LOW;
     scc(SDL_RenderCopy(
-        renderer, use_colored_char? font->spritesheet_under_cursor: font->spritesheet, &font->char_table[index], &dst
+        renderer, (is_cursor_row && is_cursor_col)? font->spritesheet_under_cursor: font->spritesheet, &font->char_table[index], &dst
     ));
 }
 
-void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, size_t cursor, float scale)
+void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, size_t cursor, bool is_cursor_row, float scale)
 {
     for (size_t i = 0; i < size; ++i) {
-        render_char(renderer, text[i], font, pos, i==cursor, scale);
+        render_char(renderer, text[i], font, pos, i==cursor, is_cursor_row, scale);
         pos.x += font->char_width * scale;
     }
-}
-
-void render_text(SDL_Renderer *renderer, const char *text, const Font *font, Vec2f pos, size_t cursor, float scale)
-{
-    const size_t size = strlen(text);
-    render_text_sized(renderer, text, size, font, pos, cursor, scale);
 }
 
 typedef struct {
@@ -252,57 +247,170 @@ size_t cursor = 0;
 
 #define LINE_MIN_CAPACITY 32
 
-void line_stretch(size_t n)
+void line_stretch(Line *line, size_t n)
 {
-    if (line.capacity == 0) {
-        line.capacity = LINE_MIN_CAPACITY;
-        line.buf = malloc(LINE_MIN_CAPACITY);
-        if (!line.buf) {
+    if (line->capacity == 0) {
+        line->capacity = LINE_MIN_CAPACITY;
+        line->buf = malloc(LINE_MIN_CAPACITY);
+        if (!line->buf) {
             fprintf(stderr, "Error: failed to stretch line buffer. %s", strerror(errno));
         }
     }
     
     bool capacity_changed = false;
-    while (line.capacity <= line.size + n) {
-        line.capacity *= 2;
+    while (line->capacity <= line->size + n) {
+        line->capacity *= 2;
         capacity_changed = true;
     }
 
     if (capacity_changed) {
-        line.buf = realloc(line.buf, line.capacity);
-        if (!line.buf) {
+        line->buf = realloc(line->buf, line->capacity);
+        if (!line->buf) {
             fprintf(stderr, "Error: failed to stretch line buffer. %s", strerror(errno));
         }
     }
 }
 
-void line_insert_text_at_cursor(const char *text)
+void line_insert_text_at_cursor_sized(Line *line, const char *text, size_t text_size, size_t *cursor)
 {
-    size_t text_size = strlen(text);
-    line_stretch(text_size);
-
-    memmove(line.buf + cursor + text_size, line.buf + cursor, line.size - cursor);
-    memcpy(line.buf + cursor, text, text_size);
-    cursor += text_size;
-    line.size += text_size;
+    line_stretch(line, text_size);
+    
+    memmove(line->buf + *cursor + text_size, line->buf + *cursor, line->size - *cursor);
+    memcpy(line->buf + *cursor, text, text_size);
+    *cursor += text_size;
+    line->size += text_size;
 }
 
-void line_backspace()
+void line_insert_text_at_cursor(Line *line, const char *text, size_t *cursor)
+{
+    size_t text_size = strlen(text);
+    line_insert_text_at_cursor_sized(line, text, text_size, cursor);
+}
+
+void line_backspace(Line *line, size_t *cursor)
 {
     if (cursor == 0) {
         return;
     }
 
-    memmove(line.buf + cursor - 1, line.buf + cursor, line.size - cursor);
-    cursor -= 1;
-    line.size -= 1;
+    memmove(line->buf + *cursor - 1, line->buf + *cursor, line->size - *cursor);
+    *cursor -= 1;
+    line->size -= 1;
 }
 
-void render_cursor(SDL_Renderer *renderer, const Font *font, float scale)
+typedef struct {
+    Line *lines;
+    size_t size;
+    size_t capacity;
+    size_t cursor_row;
+    size_t cursor_col;
+} Editor;
+
+#define EDITOR_MIN_CAPACITY 2
+
+void editor_init(Editor *editor)
+{
+    editor->lines = malloc(sizeof(Line) * EDITOR_MIN_CAPACITY);
+    editor->capacity = EDITOR_MIN_CAPACITY;
+    for (size_t i = 0; i < editor->capacity; ++i) {
+        editor->lines[i] = (Line) { 0 };
+    }
+    editor->size = 1;
+    editor->cursor_row = 0;
+    editor->cursor_col = 0;
+}
+
+void editor_insert_text(Editor *editor, const char *text)
+{
+    line_insert_text_at_cursor(&editor->lines[editor->cursor_row], text, &editor->cursor_col);
+}
+
+void editor_stretch(Editor *editor, size_t n)
+{    
+    bool capacity_changed = false;
+    while (editor->capacity <= editor->size + n) {
+        editor->capacity *= 2;
+        capacity_changed = true;
+    }
+
+    if (capacity_changed) {
+        editor->lines = realloc(editor->lines, sizeof(Line) * editor->capacity);
+        if (!editor->lines) {
+            fprintf(stderr, "Error: failed to stretch editor buffer. %s", strerror(errno));
+        }
+        for (size_t i = editor->size; i < editor->capacity; ++i) {
+            editor->lines[i] = (Line) { 0 };
+        }
+    }
+}
+
+void editor_insert_new_line(Editor *editor)
+{
+    editor_stretch(editor, 1);
+
+    Line *lines = editor->lines;
+    size_t *row = &editor->cursor_row;
+    size_t *col = &editor->cursor_col;
+    memmove(lines + *row + 2, lines + *row + 1, (editor->size - *row - 1) * sizeof(Line));
+    lines[*row + 1] = (Line) { 0 };
+
+    size_t tmp_cursor = 0;
+    line_insert_text_at_cursor_sized(lines + *row + 1, lines[*row].buf + *col, lines[*row].size - *col, &tmp_cursor);
+    
+    lines[*row].size = *col;
+    editor->size += 1;
+    *col = 0;
+    *row += 1;
+}
+
+void editor_backspace(Editor *editor)
+{
+    if (editor->cursor_col == 0) {
+        if (editor->cursor_row != 0) {
+            size_t *row = editor->cursor_row;
+            Line *lines = editor->lines;
+
+            *row -= 1;
+            editor->cursor_col = lines[*row].size;
+            size_t tmp_cursor = lines[*row].size;
+            line_insert_text_at_cursor_sized(lines + *row, lines[*row + 1].buf, lines[*row + 1].size, &tmp_cursor);
+            memmove(lines + *row + 1, lines + *row + 2, (editor->size - *row - 1) * sizeof(Line));
+            editor->size -= 1;
+        }
+    } else {
+        line_backspace(editor->lines + editor->cursor_row, &editor->cursor_col);
+    }
+}
+
+void editor_left(Editor *editor)
+{
+    if (editor->cursor_col == 0) {
+        if (editor->cursor_row != 0) {
+            editor->cursor_row -= 1;
+            editor->cursor_col = editor->lines[editor->cursor_row].size;
+        }
+    } else {
+        editor->cursor_col -= 1;
+    }
+}
+
+void editor_right(Editor *editor)
+{
+    if (editor->cursor_col == editor->lines[editor->cursor_row].size) {
+        if (editor->cursor_row + 1 != editor->size) {
+            editor->cursor_row += 1;
+            editor->cursor_col = 0;
+        }
+    } else {
+        editor->cursor_col += 1;
+    }
+}
+
+void render_cursor(SDL_Renderer *renderer, const Editor *editor, const Font *font, float scale)
 {
     SDL_Rect dst = {
-        .x = cursor * font->char_width * scale,
-        .y = 0,
+        .x = editor->cursor_col * font->char_width * scale,
+        .y = editor->cursor_row * font->char_height * scale,
         .w = font->char_width * scale,
         .h = font->char_height * scale,
     };
@@ -335,6 +443,9 @@ UNUSED int main(void)
 
     Font font = {0};
     font_load_from_file(renderer, "charmap-oldschool_white.png", &font);
+
+    Editor editor;
+    editor_init(&editor);
     
     bool quit = false;
     while (!quit) {
@@ -350,33 +461,37 @@ UNUSED int main(void)
                 case SDL_KEYDOWN: {
                     switch (event.key.keysym.sym) {
                         case SDLK_BACKSPACE: {
-                            line_backspace();
+                            editor_backspace(&editor);
                         } break;
                         
                         case SDLK_LEFT: {
-                            if (cursor > 0) {
-                                cursor -= 1;
-                            }
+                            editor_left(&editor);
                         } break;
 
                         case SDLK_RIGHT: {
-                            if (cursor < line.size) {
-                                cursor += 1;
-                            }
+                            editor_right(&editor);
                         } break;
+
+                        case SDLK_RETURN: {
+                            editor_insert_new_line(&editor);
+                        }
                     }
                 } break;
 
                 case SDL_TEXTINPUT: {
-                    line_insert_text_at_cursor(event.text.text);
+                    editor_insert_text(&editor, event.text.text);
                 } break;
             }
         }
 
         scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0x000000FF)));
         scc(SDL_RenderClear(renderer));
-        render_cursor(renderer, &font, SCALE);
-        render_text_sized(renderer, line.buf, line.size, &font, vec2fs(0), cursor, SCALE);
+        render_cursor(renderer, &editor, &font, SCALE);
+        Vec2f pos = vec2fs(0);
+        for (size_t i = 0; i < editor.size; ++i) {
+            render_text_sized(renderer, editor.lines[i].buf, editor.lines[i].size, &font, pos, editor.cursor_col, editor.cursor_row == i, SCALE);
+            pos.y += font.char_height * SCALE;
+        }
         SDL_RenderPresent(renderer);
 
         Uint32 duration = SDL_GetTicks() - start_time;
