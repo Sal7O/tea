@@ -36,6 +36,17 @@
 
 #define GET_COLOR(color)    (color)
 
+#define UNHEXA(color)   (((color) >> (8 * 0)) & 0xff), \
+                        (((color) >> (8 * 1)) & 0xff), \
+                        (((color) >> (8 * 2)) & 0xff), \
+                        (((color) >> (8 * 3)) & 0xff)
+
+#define UNHEX(color)    ((color) >> (8 * 0)) & 0xff, \
+                        ((color) >> (8 * 1)) & 0xff, \
+                        ((color) >> (8 * 2)) & 0xff
+
+#define GET_ALPHA(color) ((color) >> (8 * 3)) & 0xff
+
 #endif 
 
 static void scc(int code)
@@ -242,8 +253,6 @@ typedef struct {
     size_t size;
     size_t capacity;
 } Line;
-Line line = {0};
-size_t cursor = 0;
 
 #define LINE_MIN_CAPACITY 32
 
@@ -320,8 +329,16 @@ void editor_init(Editor *editor)
     editor->cursor_col = 0;
 }
 
+void fix_cursor_position(Editor *editor) 
+{
+    editor->cursor_col = 
+        editor->cursor_col <= editor->lines[editor->cursor_row].size? 
+        editor->cursor_col: editor->lines[editor->cursor_row].size;
+}
+
 void editor_insert_text(Editor *editor, const char *text)
 {
+    fix_cursor_position(editor);
     line_insert_text_at_cursor(&editor->lines[editor->cursor_row], text, &editor->cursor_col);
 }
 
@@ -346,6 +363,7 @@ void editor_stretch(Editor *editor, size_t n)
 
 void editor_insert_new_line(Editor *editor)
 {
+    fix_cursor_position(editor);
     editor_stretch(editor, 1);
 
     Line *lines = editor->lines;
@@ -367,7 +385,7 @@ void editor_backspace(Editor *editor)
 {
     if (editor->cursor_col == 0) {
         if (editor->cursor_row != 0) {
-            size_t *row = editor->cursor_row;
+            size_t *row = &editor->cursor_row;
             Line *lines = editor->lines;
 
             *row -= 1;
@@ -406,10 +424,31 @@ void editor_right(Editor *editor)
     }
 }
 
+void editor_up(Editor *editor)
+{
+    if (editor->cursor_row == 0) {
+        editor->cursor_col = 0;
+    } else {
+        editor->cursor_row -= 1;
+    }
+}
+
+void editor_down(Editor *editor)
+{
+    if (editor->cursor_row == editor->size - 1) {
+        editor->cursor_col = editor->lines[editor->cursor_row].size;
+    } else {
+        editor->cursor_row += 1;
+    }
+}
+
 void render_cursor(SDL_Renderer *renderer, const Editor *editor, const Font *font, float scale)
 {
+    size_t col = 
+        editor->cursor_col <= editor->lines[editor->cursor_row].size? 
+        editor->cursor_col: editor->lines[editor->cursor_row].size;
     SDL_Rect dst = {
-        .x = editor->cursor_col * font->char_width * scale,
+        .x = col * font->char_width * scale,
         .y = editor->cursor_row * font->char_height * scale,
         .w = font->char_width * scale,
         .h = font->char_height * scale,
@@ -472,9 +511,17 @@ UNUSED int main(void)
                             editor_right(&editor);
                         } break;
 
+                        case SDLK_UP: {
+                            editor_up(&editor);
+                        } break;
+
+                        case SDLK_DOWN: {
+                            editor_down(&editor);
+                        } break;
+
                         case SDLK_RETURN: {
                             editor_insert_new_line(&editor);
-                        }
+                        } break;
                     }
                 } break;
 
