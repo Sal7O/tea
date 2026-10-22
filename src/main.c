@@ -9,6 +9,7 @@
 #define WINDOW_HEIGHT 720
 #define FPS 60
 #define FRAME_TIME (1000 / (FPS))
+#define SCALE 5.0f
 
 #define UNUSED __attribute__((unused))
 
@@ -116,7 +117,7 @@ Vec2f vec2fs(float x)
     return vec2f(x, x);
 }
 
-void render_texture(SDL_Renderer *renderer, SDL_Texture *texture, Vec2f pos, float scale)
+UNUSED void texture_render(SDL_Renderer *renderer, SDL_Texture *texture, Vec2f pos, float scale)
 {
     Uint32 format; 
     int access, w, h;
@@ -135,6 +136,56 @@ void render_texture(SDL_Renderer *renderer, SDL_Texture *texture, Vec2f pos, flo
     };
     scc(SDL_RenderCopy(
         renderer, texture, &src, &dst
+    ));
+}
+
+#define ASCII_DISPLAY_LOW 32
+#define ASCII_DISPLAY_HIGH 126
+
+typedef struct 
+{
+    SDL_Texture *spritesheet;
+    SDL_Rect char_table[ASCII_DISPLAY_HIGH - ASCII_DISPLAY_LOW + 1];
+    size_t char_width;
+    size_t char_height;
+} Font;
+
+#define FONT_ROWS 7
+#define FONT_COLS 18
+
+void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *font)
+{
+    font->spritesheet = texture_load_from_file(renderer, file_path, true, 0x000000FF);
+    Uint32 format; 
+    int access, w, h;
+    scc(SDL_QueryTexture(font->spritesheet, &format, &access, &w, &h));
+    font->char_width = w / FONT_COLS;
+    font->char_height = h / FONT_ROWS;
+    for (size_t i = ASCII_DISPLAY_LOW; i <= ASCII_DISPLAY_HIGH; ++i) {
+        size_t index = i - ASCII_DISPLAY_LOW;
+        size_t row = index / FONT_COLS;
+        size_t col = index % FONT_COLS;
+        font->char_table[index] = (SDL_Rect) {
+            .x = col * font->char_width,
+            .y = row * font->char_height,
+            .w = font->char_width,
+            .h = font->char_height,
+        };
+    }
+}
+
+void render_char(SDL_Renderer *renderer, const char c, Font *font, Vec2f pos, float scale)
+{
+    SDL_Rect dst = {
+        .x = pos.x,
+        .y = pos.y,
+        .w = font->char_width * scale,
+        .h = font->char_height * scale,
+    };
+
+    int index = c - ASCII_DISPLAY_LOW;
+    scc(SDL_RenderCopy(
+        renderer, font->spritesheet, &font->char_table[index], &dst
     ));
 }
 
@@ -160,7 +211,8 @@ UNUSED int main(void)
     SDL_Renderer *renderer = 
         scp(SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED));
 
-    SDL_Texture *texure = texture_load_from_file(renderer, "charmap-oldschool_white.png", false, 0);
+    Font font = {0};
+    font_load_from_file(renderer, "charmap-oldschool_white.png", &font);
     
     bool quit = false;
     while (!quit) {
@@ -176,7 +228,7 @@ UNUSED int main(void)
         }
 
         scc(SDL_RenderClear(renderer));
-        render_texture(renderer, texure, vec2fs(0), 5.0f);
+        render_char(renderer, 'a', &font, vec2fs(0), SCALE);
         SDL_RenderPresent(renderer);
 
         Uint32 duration = SDL_GetTicks() - start_time;
