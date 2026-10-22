@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -203,6 +204,51 @@ void render_text(SDL_Renderer *renderer, const char *text, const Font *font, Vec
     render_text_sized(renderer, text, size, font, pos, scale);
 }
 
+typedef struct {
+    char *buf;
+    size_t size;
+    size_t capacity;
+} Line;
+Line line = {0};
+size_t cursor = 0;
+
+#define LINE_MIN_CAPACITY 32
+
+void line_stretch(size_t n)
+{
+    if (line.capacity == 0) {
+        line.capacity = LINE_MIN_CAPACITY;
+        line.buf = malloc(LINE_MIN_CAPACITY);
+        if (!line.buf) {
+            fprintf(stderr, "Error: failed to stretch line buffer. %s", strerror(errno));
+        }
+    }
+    
+    bool capacity_changed = false;
+    while (line.capacity <= line.size + n) {
+        line.capacity *= 2;
+        capacity_changed = true;
+    }
+
+    if (capacity_changed) {
+        line.buf = realloc(line.buf, line.capacity);
+        if (!line.buf) {
+            fprintf(stderr, "Error: failed to stretch line buffer. %s", strerror(errno));
+        }
+    }
+}
+
+void line_insert_text_at_cursor(const char *text)
+{
+    size_t text_size = strlen(text);
+    line_stretch(text_size);
+
+    memmove(line.buf + cursor + text_size, line.buf + cursor, line.size - cursor);
+    memcpy(line.buf + cursor, text, text_size);
+    cursor += text_size;
+    line.size += text_size;
+}
+
 // This is for debugging
 UNUSED int main1(void)
 {
@@ -238,11 +284,15 @@ UNUSED int main(void)
                 case SDL_QUIT: {
                     quit = true;
                 } break;
+
+                case SDL_TEXTINPUT: {
+                    line_insert_text_at_cursor(event.text.text);
+                } break;
             }
         }
 
         scc(SDL_RenderClear(renderer));
-        render_text(renderer, "Hello, World!", &font, vec2fs(0), SCALE);
+        render_text_sized(renderer, line.buf, line.size, &font, vec2fs(0), SCALE);
         SDL_RenderPresent(renderer);
 
         Uint32 duration = SDL_GetTicks() - start_time;
