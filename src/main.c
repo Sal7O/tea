@@ -1,7 +1,5 @@
-#include <stdio.h>
 #include <SDL2/SDL.h>
 #include <stdbool.h>
-#include <errno.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -265,7 +263,7 @@ void render_cursor(SDL_Renderer *renderer, const Editor *editor, const Font *fon
     scc(SDL_RenderFillRect(renderer, &dst));
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     scc(SDL_Init(SDL_INIT_VIDEO));
 
@@ -283,6 +281,9 @@ int main(void)
 
     Editor editor;
     editor_init(&editor);
+    if (argc > 1) {
+        editor_load_file(&editor, argv[1]);
+    }
     
     bool quit = false;
     while (!quit) {
@@ -319,6 +320,12 @@ int main(void)
 
                         case SDLK_RETURN: {
                             editor_insert_new_line(&editor);
+                        } break;
+
+                        case SDLK_F1: {
+                            if (argc > 1) {
+                                editor_save_file(&editor, argv[1]);
+                            }
                         } break;
                     }
                 } break;

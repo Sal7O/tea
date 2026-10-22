@@ -5,15 +5,17 @@
 #include <string.h>
 
 #include "editor.h"
+#include <unistd.h>
 
 #define LINE_MIN_CAPACITY 32
 #define EDITOR_MIN_CAPACITY 2
 
 static void line_stretch(Line *line, size_t n);
 static void line_insert_text_at_cursor_sized(Line *line, const char *text, size_t text_size, size_t *cursor);
-static void line_insert_text_at_cursor(Line *line, const char *text, size_t *cursor);
 static void line_backspace(Line *line, size_t *cursor);
-static void fix_cursor_position(Editor *editor);
+static void editor_fix_cursor_position(Editor *editor);
+static void editor_stretch(Editor *editor, size_t n);
+static void editor_insert_text_sized(Editor *editor, const char *text, size_t size);
 
 /////////////////////////////////////////////////////////////////
 
@@ -31,32 +33,64 @@ void editor_init(Editor *editor)
 
 void editor_insert_text(Editor *editor, const char *text)
 {
-    fix_cursor_position(editor);
-    line_insert_text_at_cursor(&editor->lines[editor->cursor_row], text, &editor->cursor_col);
+    editor_insert_text_sized(editor, text, strlen(text));
 }
 
-void editor_stretch(Editor *editor, size_t n)
-{    
-    bool capacity_changed = false;
-    while (editor->capacity <= editor->size + n) {
-        editor->capacity *= 2;
-        capacity_changed = true;
+void editor_load_file(Editor *editor, const char *file_path)
+{
+    if (!file_path) {
+        fprintf(stderr, "Error: Passed NULL pointer for file_path.\n");
+        exit(1);
+    }
+    FILE *f = fopen(file_path, "r");
+    if (!f) {
+        fprintf(stderr, "Error: Failed to open file %s: %s\n", file_path, strerror(errno));
+        exit(1);
     }
 
-    if (capacity_changed) {
-        editor->lines = realloc(editor->lines, sizeof(Line) * editor->capacity);
-        if (!editor->lines) {
-            fprintf(stderr, "Error: failed to stretch editor buffer. %s", strerror(errno));
-        }
-        for (size_t i = editor->size; i < editor->capacity; ++i) {
-            editor->lines[i] = (Line) { 0 };
+    char * line = NULL;
+    size_t len = 0;
+    ssize_t read;
+
+    while ((read = getline(&line, &len, f)) != -1) {
+        bool new_line = line[read - 1] == '\n';
+        editor_insert_text_sized(editor, line, read - new_line);
+        if (new_line) {
+            editor_insert_new_line(editor);
         }
     }
+
+    fclose(f);
+    if (line) {
+        free(line);
+    }
+    editor->cursor_row = editor->cursor_col = 0;
+}
+
+void editor_save_file(Editor *editor, const char *file_path)
+{
+    FILE *f = fopen(file_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: Failed to open file %s: %s\n", file_path, strerror(errno));
+        exit(1);
+    }
+
+    for (size_t i = 0; i < editor->size; ++i) {
+        fwrite(
+            editor->lines[i].buf, 
+            sizeof(char), editor->lines[i].size, f
+        );
+
+        if (i < editor->size - 1) {
+            fputc('\n', f);
+        }
+    }
+    fclose(f);
 }
 
 void editor_insert_new_line(Editor *editor)
 {
-    fix_cursor_position(editor);
+    editor_fix_cursor_position(editor);
     editor_stretch(editor, 1);
 
     Line *lines = editor->lines;
@@ -95,13 +129,17 @@ void editor_backspace(Editor *editor)
 
 void editor_left(Editor *editor)
 {
-    if (editor->cursor_col == 0) {
-        if (editor->cursor_row != 0) {
-            editor->cursor_row -= 1;
-            editor->cursor_col = editor->lines[editor->cursor_row].size;
+    size_t *col = &editor->cursor_col;
+    size_t *row = &editor->cursor_row;
+    Line *lines = editor->lines;
+    *col = *col <= lines[*row].size? *col: lines[*row].size;
+    if (*col == 0) {
+        if (*row != 0) {
+            *row -= 1;
+            *col = lines[*row].size;
         }
     } else {
-        editor->cursor_col -= 1;
+        *col -= 1;
     }
 }
 
@@ -171,12 +209,6 @@ static void line_insert_text_at_cursor_sized(Line *line, const char *text, size_
     line->size += text_size;
 }
 
-static void line_insert_text_at_cursor(Line *line, const char *text, size_t *cursor)
-{
-    size_t text_size = strlen(text);
-    line_insert_text_at_cursor_sized(line, text, text_size, cursor);
-}
-
 static void line_backspace(Line *line, size_t *cursor)
 {
     if (cursor == 0) {
@@ -188,9 +220,34 @@ static void line_backspace(Line *line, size_t *cursor)
     line->size -= 1;
 }
 
-static void fix_cursor_position(Editor *editor) 
+static void editor_fix_cursor_position(Editor *editor) 
 {
     editor->cursor_col = 
         editor->cursor_col <= editor->lines[editor->cursor_row].size? 
         editor->cursor_col: editor->lines[editor->cursor_row].size;
+}
+
+static void editor_stretch(Editor *editor, size_t n)
+{    
+    bool capacity_changed = false;
+    while (editor->capacity <= editor->size + n) {
+        editor->capacity *= 2;
+        capacity_changed = true;
+    }
+
+    if (capacity_changed) {
+        editor->lines = realloc(editor->lines, sizeof(Line) * editor->capacity);
+        if (!editor->lines) {
+            fprintf(stderr, "Error: failed to stretch editor buffer. %s", strerror(errno));
+        }
+        for (size_t i = editor->size; i < editor->capacity; ++i) {
+            editor->lines[i] = (Line) { 0 };
+        }
+    }
+}
+
+static void editor_insert_text_sized(Editor *editor, const char *text, size_t size)
+{
+    editor_fix_cursor_position(editor);
+    line_insert_text_at_cursor_sized(&editor->lines[editor->cursor_row], text, size, &editor->cursor_col);
 }
