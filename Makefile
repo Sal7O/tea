@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -pedantic -std=c99 `pkg-config --cflags sdl2`
+CFLAGS=-Wall -Wextra -pedantic -std=c99 -ggdb `pkg-config --cflags sdl2`
 LIBS=-lm `pkg-config --libs sdl2`
 
 tea: src/main.c

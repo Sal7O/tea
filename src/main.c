@@ -16,10 +16,21 @@
 
 #if SDL_BYTEORDER == SDL_LIL_ENDIAN
 
-#define GET_COLOR(color)    ((((color) << (8 * 3)) & 0xff) << (8 * 0)) + \
-                            ((((color) << (8 * 2)) & 0xff) << (8 * 1)) + \
-                            ((((color) << (8 * 1)) & 0xff) << (8 * 2)) + \
-                            ((((color) << (8 * 0)) & 0xff) << (8 * 3))
+#define GET_COLOR(color)    ((((color) >> (8 * 3)) & 0xff) << (8 * 0)) + \
+                            ((((color) >> (8 * 2)) & 0xff) << (8 * 1)) + \
+                            ((((color) >> (8 * 1)) & 0xff) << (8 * 2)) + \
+                            ((((color) >> (8 * 0)) & 0xff) << (8 * 3))
+
+#define UNHEXA(color)   (((color) >> (8 * 3)) & 0xff), \
+                        (((color) >> (8 * 2)) & 0xff), \
+                        (((color) >> (8 * 1)) & 0xff), \
+                        (((color) >> (8 * 0)) & 0xff)
+
+#define UNHEX(color)    ((color) >> (8 * 3)) & 0xff, \
+                        ((color) >> (8 * 2)) & 0xff, \
+                        ((color) >> (8 * 1)) & 0xff
+
+#define GET_ALPHA(color) ((color) >> (8 * 0)) & 0xff
 
 #else
 
@@ -71,7 +82,6 @@ SDL_Surface *surface_load_from_file(const char *file_path)
         scp(SDL_CreateRGBSurfaceFrom(
             pixels, w, h, depth, pitch, rmask, gmask, bmask, amask
         ));
-    stbi_image_free(pixels);
     return surface;
 }
 
@@ -84,17 +94,18 @@ SDL_Texture *texture_load_from_file(
         exit(1);
     }
 
-    SDL_Surface *surface = surface_load_from_file(file_path);    
+    SDL_Surface *surface = surface_load_from_file(file_path);        
+    if (set_trans_color) { 
+        scc(SDL_SetColorKey(surface, color_key, GET_COLOR(color_key)));
+    }
+
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
     if (!texture) {
         SDL_FreeSurface(surface);
         fprintf(stderr, "Error: Passed null pointer for file_path.\n");
         exit(1);
     }
-    
-    if (set_trans_color) { 
-        scc(SDL_SetColorKey(surface, color_key, GET_COLOR(color_key)));
-    }
+
     SDL_FreeSurface(surface);
     return texture;
 }
@@ -146,6 +157,7 @@ UNUSED void texture_render(SDL_Renderer *renderer, SDL_Texture *texture, Vec2f p
 typedef struct 
 {
     SDL_Texture *spritesheet;
+    SDL_Texture *spritesheet_under_cursor;
     SDL_Rect char_table[ASCII_DISPLAY_HIGH - ASCII_DISPLAY_LOW + 1];
     size_t char_width;
     size_t char_height;
@@ -154,9 +166,31 @@ typedef struct
 #define FONT_ROWS 7
 #define FONT_COLS 18
 
+// TODO: search if it is better to load the spritesheet again or copying it.
+// My first impression is that copying is cheaper because it happens in memory.
+// See: https://stackoverflow.com/questions/75873908/how-to-copy-a-texture-to-another-texture-without-pointing-to-the-same-texture
+SDL_Texture* DuplicateTexture(SDL_Texture* tex, SDL_Renderer* renderer) {
+    Uint32 format;
+    int w, h;
+    SDL_BlendMode blendmode;
+    SDL_Texture* renderTarget;
+    SDL_Texture* newTex;
+    SDL_QueryTexture(tex, &format, NULL, &w, &h);
+    SDL_GetTextureBlendMode(tex, &blendmode);
+    renderTarget = SDL_GetRenderTarget(renderer);
+    newTex = SDL_CreateTexture(renderer, format, SDL_TEXTUREACCESS_TARGET, w, h);
+    SDL_SetTextureBlendMode(newTex, SDL_BLENDMODE_NONE);
+    SDL_SetRenderTarget(renderer, newTex);
+    SDL_RenderCopy(renderer, tex, NULL, NULL);
+    SDL_SetTextureBlendMode(newTex, blendmode);
+    SDL_SetRenderTarget(renderer, renderTarget);
+    return newTex;
+}
+
 void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *font)
 {
-    font->spritesheet = texture_load_from_file(renderer, file_path, true, 0x000000FF);
+    Uint32 trans_color = 0x000000FF;
+    font->spritesheet = texture_load_from_file(renderer, file_path, true, trans_color);
     Uint32 format; 
     int access, w, h;
     scc(SDL_QueryTexture(font->spritesheet, &format, &access, &w, &h));
@@ -173,9 +207,13 @@ void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *fo
             .h = font->char_height,
         };
     }
+
+    font->spritesheet_under_cursor = DuplicateTexture(font->spritesheet, renderer);
+    scc(SDL_SetTextureColorMod(font->spritesheet_under_cursor , UNHEX(trans_color)));
+    scc(SDL_SetTextureAlphaMod(font->spritesheet_under_cursor , GET_ALPHA(trans_color)));
 }
 
-void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, float scale)
+void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bool use_colored_char, float scale)
 {
     SDL_Rect dst = {
         .x = pos.x,
@@ -186,22 +224,22 @@ void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, fl
 
     int index = c - ASCII_DISPLAY_LOW;
     scc(SDL_RenderCopy(
-        renderer, font->spritesheet, &font->char_table[index], &dst
+        renderer, use_colored_char? font->spritesheet_under_cursor: font->spritesheet, &font->char_table[index], &dst
     ));
 }
 
-void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, float scale)
+void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, size_t cursor, float scale)
 {
     for (size_t i = 0; i < size; ++i) {
-        render_char(renderer, text[i], font, pos, scale);
+        render_char(renderer, text[i], font, pos, i==cursor, scale);
         pos.x += font->char_width * scale;
     }
 }
 
-void render_text(SDL_Renderer *renderer, const char *text, const Font *font, Vec2f pos, float scale)
+void render_text(SDL_Renderer *renderer, const char *text, const Font *font, Vec2f pos, size_t cursor, float scale)
 {
     const size_t size = strlen(text);
-    render_text_sized(renderer, text, size, font, pos, scale);
+    render_text_sized(renderer, text, size, font, pos, cursor, scale);
 }
 
 typedef struct {
@@ -249,6 +287,30 @@ void line_insert_text_at_cursor(const char *text)
     line.size += text_size;
 }
 
+void line_backspace()
+{
+    if (cursor == 0) {
+        return;
+    }
+
+    memmove(line.buf + cursor - 1, line.buf + cursor, line.size - cursor);
+    cursor -= 1;
+    line.size -= 1;
+}
+
+void render_cursor(SDL_Renderer *renderer, const Font *font, float scale)
+{
+    SDL_Rect dst = {
+        .x = cursor * font->char_width * scale,
+        .y = 0,
+        .w = font->char_width * scale,
+        .h = font->char_height * scale,
+    };
+
+    scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0xFFFFFFFF)));
+    scc(SDL_RenderFillRect(renderer, &dst));
+}
+
 // This is for debugging
 UNUSED int main1(void)
 {
@@ -285,14 +347,36 @@ UNUSED int main(void)
                     quit = true;
                 } break;
 
+                case SDL_KEYDOWN: {
+                    switch (event.key.keysym.sym) {
+                        case SDLK_BACKSPACE: {
+                            line_backspace();
+                        } break;
+                        
+                        case SDLK_LEFT: {
+                            if (cursor > 0) {
+                                cursor -= 1;
+                            }
+                        } break;
+
+                        case SDLK_RIGHT: {
+                            if (cursor < line.size) {
+                                cursor += 1;
+                            }
+                        } break;
+                    }
+                } break;
+
                 case SDL_TEXTINPUT: {
                     line_insert_text_at_cursor(event.text.text);
                 } break;
             }
         }
 
+        scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0x000000FF)));
         scc(SDL_RenderClear(renderer));
-        render_text_sized(renderer, line.buf, line.size, &font, vec2fs(0), SCALE);
+        render_cursor(renderer, &font, SCALE);
+        render_text_sized(renderer, line.buf, line.size, &font, vec2fs(0), cursor, SCALE);
         SDL_RenderPresent(renderer);
 
         Uint32 duration = SDL_GetTicks() - start_time;
