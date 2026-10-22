@@ -174,7 +174,7 @@ void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *fo
     }
 }
 
-void render_char(SDL_Renderer *renderer, const char c, Font *font, Vec2f pos, float scale)
+void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, float scale)
 {
     SDL_Rect dst = {
         .x = pos.x,
@@ -187,6 +187,20 @@ void render_char(SDL_Renderer *renderer, const char c, Font *font, Vec2f pos, fl
     scc(SDL_RenderCopy(
         renderer, font->spritesheet, &font->char_table[index], &dst
     ));
+}
+
+void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, float scale)
+{
+    for (size_t i = 0; i < size; ++i) {
+        render_char(renderer, text[i], font, pos, scale);
+        pos.x += font->char_width * scale;
+    }
+}
+
+void render_text(SDL_Renderer *renderer, const char *text, const Font *font, Vec2f pos, float scale)
+{
+    const size_t size = strlen(text);
+    render_text_sized(renderer, text, size, font, pos, scale);
 }
 
 // This is for debugging
@@ -204,7 +218,7 @@ UNUSED int main(void)
 
     SDL_Window *window = 
         scp(SDL_CreateWindow(
-            "", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 
+            "tea", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 
             WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE
         ));
     
@@ -228,7 +242,7 @@ UNUSED int main(void)
         }
 
         scc(SDL_RenderClear(renderer));
-        render_char(renderer, 'a', &font, vec2fs(0), SCALE);
+        render_text(renderer, "Hello, World!", &font, vec2fs(0), SCALE);
         SDL_RenderPresent(renderer);
 
         Uint32 duration = SDL_GetTicks() - start_time;
