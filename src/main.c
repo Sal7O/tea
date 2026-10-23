@@ -10,7 +10,9 @@
 #define WINDOW_HEIGHT 720
 #define FPS 60
 #define FRAME_TIME (1000 / (FPS))
-#define SCALE 5.0f
+#define INIT_SCALE 5.0f
+#define MAX_SCALE 20.0f
+#define MIN_SCALE 1.0f
 #define HISTORY_TIME 20
 
 #define UNUSED __attribute__((unused))
@@ -410,6 +412,10 @@ void history_free(History *history)
     free(history->editors);
 }
 
+// In the navigation behaviour. If the cursor is at any end of the dimensions, 
+// It may be chopped.
+// TODO: work on making cursor fully rendered in that specific case. 
+
 int main(int argc, char **argv)
 {
     scc(SDL_Init(SDL_INIT_VIDEO));
@@ -432,12 +438,14 @@ int main(int argc, char **argv)
         editor_load_file(&editor, argv[1]);
     }
 
+    float scale = INIT_SCALE;
+
     
     global_start = vec2fs(0);
     Vec2f win_dimensions = window_get_dimensions(window);
     global_offset = vec2f(
-        ceilf(win_dimensions.x / (font.char_width * SCALE)),
-        ceilf(win_dimensions.y / (font.char_height * SCALE))
+        ceilf(win_dimensions.x / (font.char_width * scale)),
+        ceilf(win_dimensions.y / (font.char_height * scale))
     );
 
 
@@ -463,8 +471,8 @@ int main(int argc, char **argv)
                         case SDL_WINDOWEVENT_RESIZED: {
                             Vec2f win_dimensions = window_get_dimensions(window);
                             global_offset = vec2f(
-                                ceilf(win_dimensions.x / (font.char_width * SCALE)),
-                                ceilf(win_dimensions.y / (font.char_height * SCALE))
+                                ceilf(win_dimensions.x / (font.char_width * scale)),
+                                ceilf(win_dimensions.y / (font.char_height * scale))
                             );
                             global_start.x = editor.cursor_col - global_offset.x + 1;
                             global_start.y = editor.cursor_row - global_offset.y + 1;
@@ -525,6 +533,18 @@ int main(int argc, char **argv)
                             }
                         } break;
 
+                        case SDLK_EQUALS: {
+                            if ((event.key.keysym.mod & KMOD_CTRL) && (event.key.keysym.mod & KMOD_SHIFT) && scale < MAX_SCALE) {
+                                scale += 1;
+                            }
+                        } break;
+
+                        case SDLK_MINUS: {
+                            if ((event.key.keysym.mod & KMOD_CTRL) && scale > MIN_SCALE) {
+                                scale -= 1;
+                            }
+                        } break;
+
                         case SDLK_F1: {
                             if (argc > 1) {
                                 editor_save_file(&editor, argv[1]);
@@ -541,18 +561,18 @@ int main(int argc, char **argv)
             }
         }
 
-        window_update_start_position(&editor, window, &font, action, SCALE);
+        window_update_start_position(&editor, window, &font, action, scale);
 
         scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0x000000FF)));
         scc(SDL_RenderClear(renderer));
-        render_cursor(renderer, &editor, &font, SCALE);
+        render_cursor(renderer, &editor, &font, scale);
         Vec2f pos = vec2fs(0);
         for (size_t i = global_start.y; i < editor.size && i <= global_start.y + global_offset.y; ++i) {
             render_text_sized(
                 renderer, editor.lines[i].buf, editor.lines[i].size, 
-                &font, pos, editor.cursor_col, editor.cursor_row == i, SCALE
+                &font, pos, editor.cursor_col, editor.cursor_row == i, scale
             );
-            pos.y += font.char_height * SCALE;
+            pos.y += font.char_height * scale;
         }
         SDL_RenderPresent(renderer);
 
