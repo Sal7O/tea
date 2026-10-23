@@ -224,6 +224,9 @@ void font_load_from_file(SDL_Renderer *renderer, const char *file_path, Font *fo
     scc(SDL_SetTextureAlphaMod(font->spritesheet_under_cursor , GET_ALPHA(trans_color)));
 }
 
+Vec2f global_start;
+Vec2f global_offset;
+
 void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bool is_cursor_col, bool is_cursor_row, float scale)
 {
     SDL_Rect dst = {
@@ -241,7 +244,7 @@ void render_char(SDL_Renderer *renderer, char c, const Font *font, Vec2f pos, bo
 
 void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, const Font *font, Vec2f pos, size_t cursor, bool is_cursor_row, float scale)
 {
-    for (size_t i = 0; i < size; ++i) {
+    for (size_t i = global_start.x; i < size && i < global_start.x + global_offset.x; ++i) {
         render_char(renderer, text[i], font, pos, i==cursor, is_cursor_row, scale);
         pos.x += font->char_width * scale;
     }
@@ -250,19 +253,52 @@ void render_text_sized(SDL_Renderer *renderer, const char *text, size_t size, co
 void render_cursor(SDL_Renderer *renderer, const Editor *editor, const Font *font, float scale)
 {
     size_t col = 
-        editor->cursor_col <= editor->lines[editor->cursor_row].size? 
-        editor->cursor_col: editor->lines[editor->cursor_row].size;
+    editor->cursor_col <= editor->lines[editor->cursor_row].size? 
+    editor->cursor_col: editor->lines[editor->cursor_row].size;
+    
+    int x = (col - global_start.x) * font->char_width * scale;
+    int y = (editor->cursor_row - global_start.y) * font->char_height * scale;
     SDL_Rect dst = {
-        .x = col * font->char_width * scale,
-        .y = editor->cursor_row * font->char_height * scale,
+        .x = x,
+        .y = y,
         .w = font->char_width * scale,
         .h = font->char_height * scale,
     };
-
+    
     scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0xFFFFFFFF)));
     scc(SDL_RenderFillRect(renderer, &dst));
 }
 
+Vec2f window_get_dimensions(SDL_Window *window)
+{
+    int w, h;
+    SDL_GetWindowSize(window, &w, &h);
+    return vec2f(w, h);
+}
+
+void window_update_start_position(const Editor *editor)
+{
+    if (editor->cursor_row - global_start.y + 1 > global_offset.y) {
+        global_start.y = editor->cursor_row - global_offset.y + 1;
+    }
+    
+    if (editor->cursor_col - global_start.x + 1 > global_offset.x) {
+        global_start.x = editor->cursor_col - global_offset.x + 1;
+    }
+    
+    if (editor->cursor_row < global_start.y) {
+        global_start.y = editor->cursor_row;
+    }
+    
+    if (editor->cursor_col < global_start.x) {
+        global_start.x = editor->cursor_col;
+    }
+}
+
+// When pressing down while the cursor is at the end of a long line and the next line is very short, window does not render that line
+// and keeps rendering the end of the first line. not untill you do another action.
+// my be it is because the actual cursor value is still not updated.
+// TODO: use line size as the actual value of cursor to update the start.
 int main(int argc, char **argv)
 {
     scc(SDL_Init(SDL_INIT_VIDEO));
@@ -284,6 +320,14 @@ int main(int argc, char **argv)
     if (argc > 1) {
         editor_load_file(&editor, argv[1]);
     }
+
+    
+    global_start = vec2fs(0);
+    Vec2f win_dimensions = window_get_dimensions(window);
+    global_offset = vec2f(
+        ceilf(win_dimensions.x / (font.char_width * SCALE)),
+        ceilf(win_dimensions.y / (font.char_height * SCALE))
+    );
     
     bool quit = false;
     while (!quit) {
@@ -294,6 +338,26 @@ int main(int argc, char **argv)
             switch (event.type) {
                 case SDL_QUIT: {
                     quit = true;
+                } break;
+
+                case SDL_WINDOWEVENT: {
+                    switch (event.window.event) {
+                        case SDL_WINDOWEVENT_RESIZED: {
+                            Vec2f win_dimensions = window_get_dimensions(window);
+                            global_offset = vec2f(
+                                ceilf(win_dimensions.x / (font.char_width * SCALE)),
+                                ceilf(win_dimensions.y / (font.char_height * SCALE))
+                            );
+                            global_start.x = editor.cursor_col - global_offset.x + 1;
+                            global_start.y = editor.cursor_row - global_offset.y + 1;
+                            if (global_start.x < 0) {
+                                global_start.x = 0;
+                            }
+                            if (global_start.y < 0) {
+                                global_start.y = 0;
+                            }
+                        } break;
+                    }
                 } break;
 
                 case SDL_KEYDOWN: {
@@ -336,12 +400,17 @@ int main(int argc, char **argv)
             }
         }
 
+        window_update_start_position(&editor);
+
         scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0x000000FF)));
         scc(SDL_RenderClear(renderer));
         render_cursor(renderer, &editor, &font, SCALE);
         Vec2f pos = vec2fs(0);
-        for (size_t i = 0; i < editor.size; ++i) {
-            render_text_sized(renderer, editor.lines[i].buf, editor.lines[i].size, &font, pos, editor.cursor_col, editor.cursor_row == i, SCALE);
+        for (size_t i = global_start.y; i < editor.size && i <= global_start.y + global_offset.y; ++i) {
+            render_text_sized(
+                renderer, editor.lines[i].buf, editor.lines[i].size, 
+                &font, pos, editor.cursor_col, editor.cursor_row == i, SCALE
+            );
             pos.y += font.char_height * SCALE;
         }
         SDL_RenderPresent(renderer);

@@ -3,9 +3,9 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "editor.h"
-#include <unistd.h>
 
 #define LINE_MIN_CAPACITY 32
 #define EDITOR_MIN_CAPACITY 2
