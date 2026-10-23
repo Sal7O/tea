@@ -5,6 +5,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include "editor.h"
+#include "history.h"
 
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
@@ -333,85 +334,6 @@ void window_update_start_position(const Editor *editor, SDL_Window *window, Font
 // TODO: use line size as the actual value of cursor to update the start.
 
 
-typedef struct 
-{
-    Editor *editors;
-    size_t size;
-    size_t capacity;
-    size_t index;
-} History;
-
-#define HISTORY_MIN_CAPACITY 2
-
-void history_stretch(History *history, size_t n)
-{
-    if (history->capacity == 0) {
-        history->capacity = HISTORY_MIN_CAPACITY;
-        history->editors = malloc(sizeof(Editor) * HISTORY_MIN_CAPACITY);
-        if (!history->editors) {
-            fprintf(stderr, "Error: Failed to allocate memory. %s\n", strerror(errno));
-            exit(1);
-        }
-    }
-
-    bool changed = false;
-    while (history->capacity < history->size + n) {
-        changed = true;
-        history->capacity *= 2;
-    }
-
-    if (changed) {
-        history->editors = realloc(history->editors, sizeof(Editor) * history->capacity);
-        if (!history->editors) {
-            fprintf(stderr, "Error: Failed to allocate memory. %s\n", strerror(errno));
-            exit(1);
-        }
-    }
-}
-
-void history_append(History *history, Editor *editor)
-{
-    history_stretch(history, 1);
-
-    for (size_t i = history->index + 1; i < history->size; ++i) {
-        editor_free(history->editors + i);
-    }
-
-    history->index += 1;
-    history->size = history->index + 1;
-    history->editors[history->index] = *editor;
-}
-
-bool history_undo(History *history, Editor *editor)
-{
-    if (history->index == 0) {
-        return false; 
-    }
-    history->index -= 1;
-    editor_free(editor);
-    editor_deep_copy(&history->editors[history->index], editor);
-    return true;
-}
-
-bool history_redo(History *history, Editor *editor)
-{
-    if (history->index + 1 >= history->size) {
-        return false;
-    }
-    history->index += 1;
-    editor_free(editor);
-    editor_deep_copy(&history->editors[history->index], editor);
-    return true;
-}
-
-void history_free(History *history)
-{
-    for (size_t i = 0; i < history->size; ++i) {
-        editor_free(&history->editors[i]);
-    }
-    free(history->editors);
-}
-
 // In the navigation behaviour. If the cursor is at any end of the dimensions, 
 // It may be chopped.
 // TODO: work on making cursor fully rendered in that specific case. 
@@ -432,7 +354,7 @@ int main(int argc, char **argv)
     Font font = { 0 };
     font_load_from_file(renderer, "charmap-oldschool_white.png", &font);
 
-    Editor editor;
+    Editor editor = { 0 };
     editor_init(&editor);
     if (argc > 1) {
         editor_load_file(&editor, argv[1]);
@@ -450,8 +372,10 @@ int main(int argc, char **argv)
 
 
     History history = { 0 };
+    history.index = -1;
     Editor initial = { 0 };
     editor_deep_copy(&editor, &initial);
+    history_append(&history, &initial);
     Uint32 history_st = SDL_GetTicks();
     bool changed = false;
     uint8 action;
@@ -588,6 +512,7 @@ int main(int argc, char **argv)
             SDL_Delay(FRAME_TIME - frame_duration);
         }
     }
+    history_free(&history);
     editor_free(&editor);
     SDL_Quit();
 }

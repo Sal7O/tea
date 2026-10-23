@@ -96,13 +96,20 @@ void editor_deep_copy(Editor *original, Editor *copy)
     copy->capacity = original->capacity;
     copy->cursor_row = original->cursor_row;
     copy->cursor_col = original->cursor_col;
-    copy->lines = malloc(sizeof(Line) * copy->capacity);
-    if (!copy->lines && copy->capacity) {
-        fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
-        exit(1);
+    if (copy->capacity) {
+        copy->lines = malloc(sizeof(Line) * copy->capacity);
+        if (!copy->lines) {
+            fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
+            exit(1);
+        }
+    } else {
+        copy->lines = NULL;
     }
     for (size_t i = 0; i < original->size; ++i) {
         line_deep_copy(&original->lines[i], &copy->lines[i]);
+    }
+    for (size_t i = original->size; i < original->capacity; ++i) {
+        copy->lines[i] = (Line){ 0 };
     }
 }
 
@@ -112,7 +119,9 @@ void editor_free(Editor *editor)
         for (size_t i = 0; i < editor->size; ++i) {
             line_free(editor->lines + i);
         }
-        free(editor->lines);
+        if (editor->lines) {
+            free(editor->lines);
+        }
     }
 }
 
@@ -284,12 +293,16 @@ static void line_deep_copy(Line *original, Line *copy)
 {
     copy->size = original->size;
     copy->capacity = original->capacity;
-    copy->buf = malloc(copy->capacity);
-    if (!copy->buf && copy->capacity) {
-        fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
-        exit(1);
+    if (copy->capacity) {
+        copy->buf = malloc(copy->capacity);
+        if (!copy->buf) {
+            fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
+            exit(1);
+        }
+        memcpy(copy->buf, original->buf, original->size);
+    } else {
+        copy->buf = NULL;
     }
-    memcpy(copy->buf, original->buf, original->size);
 }
 
 static void line_free(Line *line)
