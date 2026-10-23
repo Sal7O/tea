@@ -27,5 +27,7 @@ void editor_insert_new_line(Editor *editor);
 void editor_insert_text(Editor *editor, const char *text);
 void editor_load_file(Editor *editor, const char *file_path);
 void editor_save_file(Editor *editor, const char *file_path);
+void editor_deep_copy(Editor *original, Editor *copy);
+void editor_free(Editor *editor);
 
 #endif // EDITOR_H_

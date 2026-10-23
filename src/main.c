@@ -1,5 +1,6 @@
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -10,6 +11,7 @@
 #define FPS 60
 #define FRAME_TIME (1000 / (FPS))
 #define SCALE 5.0f
+#define HISTORY_TIME 20
 
 #define UNUSED __attribute__((unused))
 
@@ -299,6 +301,100 @@ void window_update_start_position(const Editor *editor)
 // and keeps rendering the end of the first line. not untill you do another action.
 // my be it is because the actual cursor value is still not updated.
 // TODO: use line size as the actual value of cursor to update the start.
+
+
+typedef struct 
+{
+    Editor *editors;
+    size_t size;
+    size_t capacity;
+    size_t index;
+} History;
+
+#define HISTORY_MIN_CAPACITY 2
+
+void history_stretch(History *history, size_t n)
+{
+    if (history->capacity == 0) {
+        history->capacity = HISTORY_MIN_CAPACITY;
+        history->editors = malloc(sizeof(Editor) * HISTORY_MIN_CAPACITY);
+        if (!history->editors) {
+            fprintf(stderr, "Error: Failed to allocate memory. %s\n", strerror(errno));
+            exit(1);
+        }
+    }
+
+    bool changed = false;
+    while (history->capacity < history->size + n) {
+        changed = true;
+        history->capacity *= 2;
+    }
+
+    if (changed) {
+        history->editors = realloc(history->editors, sizeof(Editor) * history->capacity);
+        if (!history->editors) {
+            fprintf(stderr, "Error: Failed to allocate memory. %s\n", strerror(errno));
+            exit(1);
+        }
+    }
+}
+
+void history_append(History *history, Editor *editor)
+{
+    history_stretch(history, 1);
+
+    for (size_t i = history->index + 1; i < history->size; ++i) {
+        editor_free(history->editors + i);
+    }
+
+    history->index += 1;
+    history->size = history->index + 1;
+    history->editors[history->index] = *editor;
+}
+
+bool history_undo(History *history, Editor *editor)
+{
+    if (history->index == 0) {
+        return false; 
+    }
+    history->index -= 1;
+    editor_free(editor);
+    editor_deep_copy(&history->editors[history->index], editor);
+    return true;
+}
+
+bool history_redo(History *history, Editor *editor)
+{
+    if (history->index + 1 >= history->size) {
+        return false;
+    }
+    history->index += 1;
+    editor_free(editor);
+    editor_deep_copy(&history->editors[history->index], editor);
+    return true;
+}
+
+void history_free(History *history)
+{
+    for (size_t i = 0; i < history->size; ++i) {
+        editor_free(&history->editors[i]);
+    }
+    free(history->editors);
+}
+
+typedef enum 
+{
+    INSERT_NEWLINE_ACTION = -1,
+    INSERT_TEXT_ACTION = -2,
+    BACKSPACE_ACTION = -3,
+    MOVE_LEFT_ACTION = 1,
+    MOVE_RIGHT_ACTION = 2,
+    MOVE_UP_ACTION = 3,
+    MOVE_DOWN_ACTION = 4,
+} Action;
+
+typedef uint8_t uint8;
+
 int main(int argc, char **argv)
 {
     scc(SDL_Init(SDL_INIT_VIDEO));
@@ -312,7 +408,7 @@ int main(int argc, char **argv)
     SDL_Renderer *renderer = 
         scp(SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED));
 
-    Font font = {0};
+    Font font = { 0 };
     font_load_from_file(renderer, "charmap-oldschool_white.png", &font);
 
     Editor editor;
@@ -328,11 +424,17 @@ int main(int argc, char **argv)
         ceilf(win_dimensions.x / (font.char_width * SCALE)),
         ceilf(win_dimensions.y / (font.char_height * SCALE))
     );
-    
+
+
+    History history = { 0 };
+    Editor initial = { 0 };
+    editor_deep_copy(&editor, &initial);
+    Uint32 history_st = SDL_GetTicks();
+    bool changed = false;
+
     bool quit = false;
     while (!quit) {
-        Uint32 start_time = SDL_GetTicks();
-
+        Uint32 frame_st = SDL_GetTicks();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
@@ -364,6 +466,8 @@ int main(int argc, char **argv)
                     switch (event.key.keysym.sym) {
                         case SDLK_BACKSPACE: {
                             editor_backspace(&editor);
+                            changed = true;
+                            history_st = SDL_GetTicks();
                         } break;
                         
                         case SDLK_LEFT: {
@@ -384,6 +488,23 @@ int main(int argc, char **argv)
 
                         case SDLK_RETURN: {
                             editor_insert_new_line(&editor);
+                            changed = true;
+                            history_st = SDL_GetTicks();
+                        } break;
+
+                        case SDLK_z: {
+                            if (changed) {
+                                Editor copy;
+                                editor_deep_copy(&editor, &copy);
+                                history_append(&history, &copy);
+                                changed = false;
+                            }
+
+                            if ((event.key.keysym.mod & KMOD_CTRL) && (event.key.keysym.mod & KMOD_SHIFT)) {
+                                history_redo(&history, &editor);
+                            } else if (event.key.keysym.mod & KMOD_CTRL) {
+                                history_undo(&history, &editor);
+                            }
                         } break;
 
                         case SDLK_F1: {
@@ -396,6 +517,8 @@ int main(int argc, char **argv)
 
                 case SDL_TEXTINPUT: {
                     editor_insert_text(&editor, event.text.text);
+                    changed = true;
+                    history_st = SDL_GetTicks();
                 } break;
             }
         }
@@ -415,11 +538,18 @@ int main(int argc, char **argv)
         }
         SDL_RenderPresent(renderer);
 
-        Uint32 duration = SDL_GetTicks() - start_time;
-        if (duration < FRAME_TIME) {
-            SDL_Delay(FRAME_TIME - duration);
+        if (HISTORY_TIME < SDL_GetTicks() - history_st && changed) {
+            Editor copy;
+            editor_deep_copy(&editor, &copy);
+            history_append(&history, &copy);
+            changed = false;
+        }
+
+        Uint32 frame_duration = SDL_GetTicks() - frame_st;
+        if (frame_duration < FRAME_TIME) {
+            SDL_Delay(FRAME_TIME - frame_duration);
         }
     }
-
+    editor_free(&editor);
     SDL_Quit();
 }

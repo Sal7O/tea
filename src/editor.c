@@ -16,6 +16,8 @@ static void line_backspace(Line *line, size_t *cursor);
 static void editor_fix_cursor_position(Editor *editor);
 static void editor_stretch(Editor *editor, size_t n);
 static void editor_insert_text_sized(Editor *editor, const char *text, size_t size);
+static void line_deep_copy(Line *original, Line *copy);
+static void line_free(Line *line);
 
 /////////////////////////////////////////////////////////////////
 
@@ -86,6 +88,32 @@ void editor_save_file(Editor *editor, const char *file_path)
         }
     }
     fclose(f);
+}
+
+void editor_deep_copy(Editor *original, Editor *copy)
+{
+    copy->size = original->size;
+    copy->capacity = original->capacity;
+    copy->cursor_row = original->cursor_row;
+    copy->cursor_col = original->cursor_col;
+    copy->lines = malloc(sizeof(Line) * copy->capacity);
+    if (!copy->lines && copy->capacity) {
+        fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
+        exit(1);
+    }
+    for (size_t i = 0; i < original->size; ++i) {
+        line_deep_copy(&original->lines[i], &copy->lines[i]);
+    }
+}
+
+void editor_free(Editor *editor)
+{
+    if (editor) {
+        for (size_t i = 0; i < editor->size; ++i) {
+            line_free(editor->lines + i);
+        }
+        free(editor->lines);
+    }
 }
 
 void editor_insert_new_line(Editor *editor)
@@ -250,4 +278,23 @@ static void editor_insert_text_sized(Editor *editor, const char *text, size_t si
 {
     editor_fix_cursor_position(editor);
     line_insert_text_at_cursor_sized(&editor->lines[editor->cursor_row], text, size, &editor->cursor_col);
+}
+
+static void line_deep_copy(Line *original, Line *copy)
+{
+    copy->size = original->size;
+    copy->capacity = original->capacity;
+    copy->buf = malloc(copy->capacity);
+    if (!copy->buf && copy->capacity) {
+        fprintf(stderr, "Error: failed to allocate memory: %s\n", strerror(errno));
+        exit(1);
+    }
+    memcpy(copy->buf, original->buf, original->size);
+}
+
+static void line_free(Line *line)
+{
+    if (line) {
+        free(line->buf);
+    }
 }
