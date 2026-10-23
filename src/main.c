@@ -278,7 +278,20 @@ Vec2f window_get_dimensions(SDL_Window *window)
     return vec2f(w, h);
 }
 
-void window_update_start_position(const Editor *editor)
+typedef uint8_t uint8;
+
+typedef enum 
+{
+    INSERT_NEWLINE_ACTION = -1,
+    INSERT_TEXT_ACTION = -2,
+    BACKSPACE_ACTION = -3,
+    MOVE_LEFT_ACTION = 1,
+    MOVE_RIGHT_ACTION = 2,
+    MOVE_UP_ACTION = 3,
+    MOVE_DOWN_ACTION = 4,
+} Action;
+
+void window_update_start_position(const Editor *editor, SDL_Window *window, Font *font, uint8 action, float scale)
 {
     if (editor->cursor_row - global_start.y + 1 > global_offset.y) {
         global_start.y = editor->cursor_row - global_offset.y + 1;
@@ -294,6 +307,21 @@ void window_update_start_position(const Editor *editor)
     
     if (editor->cursor_col < global_start.x) {
         global_start.x = editor->cursor_col;
+    }
+
+    // This is for up and down
+    size_t window_width = window_get_dimensions(window).x / scale / font->char_width;
+    if (
+        editor->cursor_col > editor->lines[editor->cursor_row].size && 
+        (
+            (action == MOVE_UP_ACTION && editor->lines[editor->cursor_row + 1].size - editor->lines[editor->cursor_row].size > window_width) ||
+            (action == MOVE_DOWN_ACTION && editor->lines[editor->cursor_row - 1].size - editor->lines[editor->cursor_row].size > window_width)
+        )
+    ) {
+        global_start.x =
+            editor->lines[editor->cursor_row].size > 0
+                ? editor->lines[editor->cursor_row].size - 1
+                : 0;
     }
 }
 
@@ -382,19 +410,6 @@ void history_free(History *history)
     free(history->editors);
 }
 
-typedef enum 
-{
-    INSERT_NEWLINE_ACTION = -1,
-    INSERT_TEXT_ACTION = -2,
-    BACKSPACE_ACTION = -3,
-    MOVE_LEFT_ACTION = 1,
-    MOVE_RIGHT_ACTION = 2,
-    MOVE_UP_ACTION = 3,
-    MOVE_DOWN_ACTION = 4,
-} Action;
-
-typedef uint8_t uint8;
-
 int main(int argc, char **argv)
 {
     scc(SDL_Init(SDL_INIT_VIDEO));
@@ -431,6 +446,7 @@ int main(int argc, char **argv)
     editor_deep_copy(&editor, &initial);
     Uint32 history_st = SDL_GetTicks();
     bool changed = false;
+    uint8 action;
 
     bool quit = false;
     while (!quit) {
@@ -480,10 +496,12 @@ int main(int argc, char **argv)
 
                         case SDLK_UP: {
                             editor_up(&editor);
+                            action = MOVE_UP_ACTION;
                         } break;
 
                         case SDLK_DOWN: {
                             editor_down(&editor);
+                            action = MOVE_DOWN_ACTION;
                         } break;
 
                         case SDLK_RETURN: {
@@ -523,7 +541,7 @@ int main(int argc, char **argv)
             }
         }
 
-        window_update_start_position(&editor);
+        window_update_start_position(&editor, window, &font, action, SCALE);
 
         scc(SDL_SetRenderDrawColor(renderer, UNHEXA(0x000000FF)));
         scc(SDL_RenderClear(renderer));
